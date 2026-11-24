@@ -98,6 +98,49 @@
 
   const between = (start, from, to) => milestones(start, to).filter(m => m.at > from);
 
+  /* ------------------------------------------------ Décomptes (jusqu'à une date) */
+
+  const startOfDay = t => { const d = new Date(t); d.setHours(0, 0, 0, 0); return d.getTime(); };
+  const isCountdown = c => !!c && c.mode === "countdown";
+
+  // Prochaine échéance d'un décompte. Un décompte annuel garde sa date toute la journée
+  // du jour J, puis passe à l'année suivante.
+  function countdownTarget(c, now) {
+    const base = c.targetAt;
+    if (!c.repeat) return base;
+    let k = Math.max(0, new Date(now).getFullYear() - new Date(base).getFullYear() - 1);
+    let t = addMonths(base, 12 * k);
+    while (addDays(startOfDay(t), 1) <= now) t = addMonths(base, 12 * ++k);
+    return t;
+  }
+
+  // Étapes d'un décompte : J-100, J-30, J-7, J-1 (au début du jour) puis le jour J
+  const CD_STEPS = [100, 30, 7, 1];
+  function countdownSteps(c, from, to) {
+    const targets = [];
+    if (!c.repeat) targets.push(c.targetAt);
+    else {
+      let k = Math.max(0, new Date(from).getFullYear() - new Date(c.targetAt).getFullYear() - 1);
+      for (; k < 400; k++) {
+        const t = addMonths(c.targetAt, 12 * k);
+        if (addDays(startOfDay(t), -(CD_STEPS[0] + 1)) > to) break;
+        targets.push(t);
+      }
+    }
+    const out = [];
+    for (const t of targets) {
+      for (const n of CD_STEPS) out.push({ key: `t${t}:j${n}`, at: addDays(startOfDay(t), -n), label: `J-${n}`, n, kind: "cd", target: t });
+      out.push({ key: `t${t}:j0`, at: t, label: "Jour J", n: 0, kind: "cd", target: t });
+    }
+    return out.filter(m => m.at > from && m.at <= to).sort((a, b) => a.at - b.at);
+  }
+
+  // Prochains caps (compteur) ou prochaines étapes (décompte)
+  function upcomingFor(c, now, count = 1) {
+    if (isCountdown(c)) return countdownSteps(c, now, now + (count + 1) * 370 * DAY).slice(0, count);
+    return upcoming(c.startAt, now, count);
+  }
+
   function upcoming(start, now, count = 1) {
     const from = Math.max(start, now);
     return milestones(start, from + (count + 2) * 370 * DAY).filter(m => m.at > now).slice(0, count);
@@ -112,16 +155,41 @@
   function dueMilestones(list, now, seen) {
     const due = [];
     for (const c of list || []) {
-      if (!c || c.notify === false || !(c.startAt <= now)) continue;
-      for (const m of between(c.startAt, Math.max(c.startAt, now - GRACE), now)) {
-        const seenKey = `${c.id}:${c.startAt}:${m.key}`;
-        if (!seen.has(seenKey)) due.push({ counter: c, milestone: m, seenKey });
+      if (!c || c.notify === false) continue;
+      let steps;
+      if (isCountdown(c)) {
+        if (typeof c.targetAt !== "number") continue;
+        // rien d'antérieur à la création du décompte (startAt = création)
+        steps = countdownSteps(c, Math.max(c.startAt || 0, now - GRACE), now);
+      } else {
+        if (!(c.startAt <= now)) continue;
+        steps = between(c.startAt, Math.max(c.startAt, now - GRACE), now);
       }
+      const fresh = steps
+        .map(m => ({ counter: c, milestone: m, seenKey: `${c.id}:${c.startAt}:${m.key}` }))
+        .filter(d => !seen.has(d.seenKey));
+      // Décompte : seule l'étape la plus récente s'affiche (pas « J-1 » et « Jour J » d'un coup) ;
+      // les autres sont marquées vues sans notification.
+      if (isCountdown(c)) fresh.forEach((d, i) => { if (i < fresh.length - 1) d.silent = true; });
+      due.push(...fresh);
     }
     return due;
   }
 
   function notificationFor({ counter, milestone, seenKey }) {
+    if (milestone.kind === "cd") {
+      const n = milestone.n;
+      return {
+        title: n === 0 ? `Jour J : ${counter.name}` : `${milestone.label} : ${counter.name}`,
+        options: {
+          body: n === 0 ? `C’est aujourd’hui : « ${counter.name} » !` : `Plus que ${n} ${n > 1 ? "jours" : "jour"} avant « ${counter.name} ».`,
+          tag: seenKey,
+          icon: "icons/icon-192.png",
+          badge: "icons/icon-192.png",
+          data: { url: `./#/c/${counter.id}` }
+        }
+      };
+    }
     return {
       title: `Nouveau cap : ${milestone.label}`,
       options: {
@@ -168,6 +236,7 @@
     DAY, HOUR, GRACE, fmtInt,
     addDays, addMonths, fullDays, fullMonths, fullYears, totals, breakdown,
     milestones, between, upcoming, previous, dueMilestones, notificationFor,
+    startOfDay, isCountdown, countdownTarget, countdownSteps, upcomingFor,
     kvGet, kvSet
   };
 })(globalThis);

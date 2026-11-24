@@ -40,10 +40,27 @@ const ICONS = [
   "hourglass-half", "wine-glass-empty", "ban-smoking", "baby", "heart", "ring",
   "cake-candles", "person-running", "dumbbell", "leaf", "seedling", "mug-hot",
   "cookie-bite", "mobile-screen", "gamepad", "bed", "house", "briefcase",
-  "car", "plane", "dog", "cat", "book", "star"
+  "car", "plane", "dog", "cat", "book", "star",
+  "tree", "gift", "champagne-glasses", "umbrella-beach", "ghost", "flag"
 ];
 
 const COLORS = ["#1D6B57", "#3B4BDB", "#D2433D", "#C98A0B", "#8340D6", "#0B8FAE", "#D9577F", "#4B5568"];
+
+// Prochaine occurrence d'une date annuelle (mois 0-11), à minuit ; le jour même compte encore
+function nextAnnual(month, day, now = Date.now()) {
+  const y = new Date(now).getFullYear();
+  const t = new Date(y, month, day).getTime();
+  return C.addDays(t, 1) <= now ? new Date(y + 1, month, day).getTime() : t;
+}
+
+// Raccourcis proposés dans l'éditeur en mode décompte
+const QUICK_DATES = [
+  { name: "Noël", month: 11, day: 25, icon: "tree" },
+  { name: "Nouvel an", month: 0, day: 1, icon: "champagne-glasses" },
+  { name: "Saint-Valentin", month: 1, day: 14, icon: "heart" },
+  { name: "14 Juillet", month: 6, day: 14, icon: "flag" },
+  { name: "Halloween", month: 9, day: 31, icon: "ghost" }
+];
 
 const TEMPLATES = [
   {
@@ -57,6 +74,12 @@ const TEMPLATES = [
   {
     title: "Depuis une naissance", text: "En jours, semaines et années à la fois",
     data: { name: "", icon: "baby", color: "#D9577F", units: ["days", "weeks", "years"], display: "totals", resettable: false }
+  },
+  {
+    title: "Jusqu’à Noël", text: "Un décompte en jours, relancé chaque année",
+    get data() {
+      return { name: "Noël", icon: "tree", color: "#D2433D", mode: "countdown", targetAt: nextAnnual(11, 25), repeat: true, allDay: true, units: ["days"], display: "totals" };
+    }
   }
 ];
 
@@ -137,11 +160,13 @@ const fmtDate = (t, opts = { day: "numeric", month: "long", year: "numeric" }) =
 const fmtTime = t => new Date(t).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
 const fmtDateTime = t => `${fmtDate(t, { weekday: "long", day: "numeric", month: "long", year: "numeric" })} à ${fmtTime(t)}`;
 
-function fmtSince(t, now = Date.now()) {
+const fmtDay = t => fmtDate(t, { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+
+function fmtSince(t, now = Date.now(), allDay = false) {
   if (t > now) return `démarre le ${fmtDate(t)}`;
   const d = dayDiff(t, now);
-  if (d === 0) return `depuis aujourd’hui, ${fmtTime(t)}`;
-  if (d === 1) return `depuis hier, ${fmtTime(t)}`;
+  if (d === 0) return allDay ? "depuis aujourd’hui" : `depuis aujourd’hui, ${fmtTime(t)}`;
+  if (d === 1) return allDay ? "depuis hier" : `depuis hier, ${fmtTime(t)}`;
   return `depuis le ${fmtDate(t)}`;
 }
 
@@ -169,9 +194,14 @@ function fmtSpan(start, end, short = false) {
 
 const pad2 = n => String(n).padStart(2, "0");
 
+function toLocalDay(t) {
+  const d = new Date(t);
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
+
 function toLocalInput(t) {
   const d = new Date(t);
-  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+  return `${toLocalDay(t)}T${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
 }
 
 /* =========================================================
@@ -183,15 +213,48 @@ const unitsOf = c => {
   return list.length ? list : ["days"];
 };
 
+const isCd = c => C.isCountdown(c);
+
+// Intervalle mesuré : départ → maintenant (compteur) ou maintenant → date visée (décompte).
+// À la journée, on compte depuis minuit : le 24 novembre, Noël est à J-31, donc 31 jours.
+function span(c, now = Date.now()) {
+  if (isCd(c)) {
+    const target = C.countdownTarget(c, now);
+    const from = c.allDay ? C.startOfDay(now) : now;
+    return { from, to: Math.max(from, target) };
+  }
+  return { from: c.startAt, to: now };
+}
+
 function unitValues(c, now = Date.now()) {
   const units = unitsOf(c);
+  const { from, to } = span(c, now);
   if (c.display === "breakdown") {
-    const vals = C.breakdown(c.startAt, now, units).map(([u, v]) => ({ u, v }));
+    const vals = C.breakdown(from, to, units).map(([u, v]) => ({ u, v }));
     const first = vals.findIndex(x => x.v > 0);
     return first === -1 ? vals.slice(-1) : vals.slice(first);
   }
-  const t = C.totals(c.startAt, now);
+  const t = C.totals(from, to);
   return UNIT_ASC.filter(u => units.includes(u)).map(u => ({ u, v: t[u] }));
+}
+
+// État d'un décompte : jours restants (J-n), jour J, ou passé
+function cdState(c, now = Date.now()) {
+  const target = C.countdownTarget(c, now);
+  const d = dayDiff(now, target);
+  return { target, d, today: d === 0, past: d < 0 };
+}
+
+// Ligne sous les valeurs d'une carte
+function whenLine(c, now = Date.now()) {
+  if (!isCd(c)) return fmtSince(c.startAt, now, c.allDay);
+  const { target, d, today, past } = cdState(c, now);
+  if (past) return `Passé le ${fmtDate(target)}`;
+  const time = c.allDay ? "" : ` à ${fmtTime(target)}`;
+  const yearly = c.repeat ? " · chaque année" : "";
+  if (today) return `Jour J, aujourd’hui${time}${yearly}`;
+  const date = fmtDate(target, d > 300 ? undefined : { day: "numeric", month: "long" });
+  return `J-${fmtInt(d)} · le ${date}${time}${yearly}`;
 }
 
 const unitLabel = (u, v) => plural(v, UNITS[u].one, UNITS[u].many);
@@ -207,11 +270,21 @@ const unitsHtml = (c, now, cls = "") =>
 
 function unitsText(c, now = Date.now()) {
   const vals = unitValues(c, now).map(({ u, v }) => `${fmtInt(v)} ${unitLabel(u, v)}`);
-  return c.display === "breakdown" ? vals.join(", ") : vals.join(" · ");
+  const txt = c.display === "breakdown" ? vals.join(", ") : vals.join(" · ");
+  return isCd(c) ? `encore ${txt}` : txt;
 }
 
 // Ce qui dépasse les jours pleins : heures, minutes, secondes
 function tickerText(c, now = Date.now()) {
+  if (isCd(c)) {
+    const t = C.countdownTarget(c, now);
+    if (now >= t) return dayDiff(t, now) === 0 ? "C’est l’heure !" : "";
+    const days = C.fullDays(now, t);
+    let rest = Math.floor((t - C.addDays(now, days)) / 1000);
+    const h = Math.floor(rest / 3600); rest -= h * 3600;
+    const m = Math.floor(rest / 60); const s = rest - m * 60;
+    return `et ${h} h ${pad2(m)} min ${pad2(s)} s`;
+  }
   if (c.startAt > now) return `Démarre ${fmtIn(c.startAt, now)}`;
   const days = C.fullDays(c.startAt, now);
   let rest = Math.floor((now - C.addDays(c.startAt, days)) / 1000);
@@ -422,8 +495,8 @@ function renderLoading() {
 function nextCapOverall(now = Date.now()) {
   let best = null;
   for (const c of state.counters) {
-    if (c.startAt > now) continue;
-    const m = C.upcoming(c.startAt, now, 1)[0];
+    if (!isCd(c) && c.startAt > now) continue;
+    const m = C.upcomingFor(c, now, 1)[0];
     if (m && (!best || m.at < best.m.at)) best = { c, m };
   }
   return best;
@@ -457,7 +530,7 @@ function renderHome() {
         </button>
       </div>`;
     $$("[data-template]", view).forEach(btn => btn.addEventListener("click", () => {
-      const t = TEMPLATES[+btn.dataset.template];
+      const t = TEMPLATES[btn.dataset.template];
       openCounterEditor(null, t ? t.data : {});
     }));
     return;
@@ -496,8 +569,10 @@ function sectionHtml(cat, items, now) {
 }
 
 function cardHtml(c, now) {
-  const prev = c.startAt <= now ? C.previous(c.startAt, now) : null;
+  const cd = isCd(c);
+  const prev = !cd && c.startAt <= now ? C.previous(c.startAt, now) : null;
   const recent = prev && now - prev.at < RECENT_CAP;
+  const jourJ = cd && cdState(c, now).today;
   return `
     <article class="counter-card" data-id="${esc(c.id)}" style="--c:${esc(c.color || COLORS[0])}" tabindex="0" aria-label="${esc(c.name)} : ${esc(unitsText(c, now))}">
       <span class="counter-badge"><i class="fa-solid fa-${esc(c.icon || "hourglass-half")}"></i></span>
@@ -505,11 +580,12 @@ function cardHtml(c, now) {
         <div class="counter-top">
           <strong class="counter-name">${esc(c.name)}</strong>
           ${recent ? `<span class="cap-pill"><i class="fa-solid fa-trophy"></i>${esc(prev.label)}</span>` : ""}
+          ${jourJ ? `<span class="cap-pill"><i class="fa-solid fa-star"></i>Jour J</span>` : ""}
         </div>
         ${unitsHtml(c, now)}
-        <span class="counter-since">${esc(fmtSince(c.startAt, now))}</span>
+        <span class="counter-since">${esc(whenLine(c, now))}</span>
       </div>
-      ${c.resettable !== false ? `<button type="button" class="icon-btn counter-reset" data-reset aria-label="Remettre « ${esc(c.name)} » à zéro" title="Remettre à zéro"><i class="fa-solid fa-rotate-left"></i></button>` : "<span></span>"}
+      ${!cd && c.resettable !== false ? `<button type="button" class="icon-btn counter-reset" data-reset aria-label="Remettre « ${esc(c.name)} » à zéro" title="Remettre à zéro"><i class="fa-solid fa-rotate-left"></i></button>` : "<span></span>"}
     </article>`;
 }
 
@@ -712,7 +788,7 @@ function renderCounter(c) {
     actions: [{ icon: "fa-pen", label: "Modifier", onClick: () => openCounterEditor(c) }]
   });
   setFab(null);
-
+  if (isCd(c)) return renderCountdown(c, now);
   const started = c.startAt <= now;
   const next = started ? C.upcoming(c.startAt, now, 1)[0] : null;
   const prev = started ? C.previous(c.startAt, now) : null;
@@ -724,8 +800,8 @@ function renderCounter(c) {
     <section class="hero" style="--c:${esc(c.color || COLORS[0])}">
       <span class="counter-badge counter-badge--lg"><i class="fa-solid fa-${esc(c.icon || "hourglass-half")}"></i></span>
       ${unitsHtml(c, now, "units--hero")}
-      <p class="ticker" data-ticker="${esc(c.id)}">${esc(tickerText(c, now))}</p>
-      <p class="hero-since">${esc(started ? `Depuis le ${fmtDateTime(c.startAt)}` : `Démarre le ${fmtDateTime(c.startAt)}`)}</p>
+      ${c.allDay ? "" : `<p class="ticker" data-ticker="${esc(c.id)}">${esc(tickerText(c, now))}</p>`}
+      <p class="hero-since">${esc(`${started ? "Depuis" : "Démarre"} le ${c.allDay ? fmtDay(c.startAt) : fmtDateTime(c.startAt)}`)}</p>
     </section>
 
     ${next ? `
@@ -759,6 +835,40 @@ function renderCounter(c) {
     persist(updateDoc(userDoc("counters", c.id), { history: true }), "Historique activé");
   });
   $$("[data-del-period]", view).forEach(btn => btn.addEventListener("click", () => deletePeriod(c, +btn.dataset.delPeriod)));
+}
+
+function renderCountdown(c, now) {
+  const { target, d, today, past } = cdState(c, now);
+  // Repère du « chemin parcouru » : l'occurrence précédente (annuel) ou la création du décompte
+  const ref = c.repeat ? C.addMonths(target, -12) : Math.min(c.startAt || now, target);
+  const pct = target > ref ? Math.min(100, Math.max(0, (now - ref) / (target - ref) * 100)) : 100;
+  const next = C.upcomingFor(c, now, 1)[0];
+  const showNext = next && next.n !== 0 && next.target === target;
+
+  $("#view").innerHTML = `
+    <section class="hero" style="--c:${esc(c.color || COLORS[0])}">
+      <span class="counter-badge counter-badge--lg"><i class="fa-solid fa-${esc(c.icon || "hourglass-half")}"></i></span>
+      ${today || past ? `<p class="cd-done">${today ? "C’est aujourd’hui !" : "C’est passé."}</p>` : `
+      <p class="cd-label">Encore</p>
+      ${unitsHtml(c, now, "units--hero")}`}
+      ${c.allDay || past ? "" : `<p class="ticker" data-ticker="${esc(c.id)}">${esc(tickerText(c, now))}</p>`}
+      <p class="hero-since">${esc(`${past ? "C’était le" : "Jusqu’au"} ${c.allDay ? fmtDay(target) : fmtDateTime(target)}${c.repeat ? " · chaque année" : ""}`)}</p>
+    </section>
+    ${past ? `
+    <section class="card next-cap">
+      <p class="muted">Ce décompte est terminé. Choisis une nouvelle date, ou active « Chaque année » pour qu’il reparte tout seul.</p>
+      <button type="button" class="btn btn-ghost btn-small" data-edit style="align-self:flex-start"><i class="fa-solid fa-pen"></i> Modifier la date</button>
+    </section>` : `
+    <section class="card next-cap" style="--c:${esc(c.color || COLORS[0])}">
+      <div class="next-cap-head">
+        <strong>${today ? "Jour J" : `J-${fmtInt(d)}`}</strong>
+        <span class="muted">${Math.floor(pct)} % du chemin parcouru</span>
+      </div>
+      <div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(pct)}" aria-label="Chemin parcouru jusqu’au jour J"><span style="width:${pct.toFixed(1)}%"></span></div>
+      ${showNext ? `<p class="muted">Prochaine étape : <strong>${esc(next.label)}</strong>, ${esc(fmtIn(next.at, now))}.</p>` : ""}
+    </section>`}`;
+
+  $("[data-edit]", $("#view"))?.addEventListener("click", () => openCounterEditor(c));
 }
 
 function historyHtml(c, now) {
@@ -825,7 +935,7 @@ async function resetCounter(c) {
   });
   if (!ok) return;
   const at = Date.now();
-  const upd = { startAt: at, lastResetAt: at };
+  const upd = { startAt: c.allDay ? C.startOfDay(at) : at, lastResetAt: at };
   if (c.history && c.startAt < at) upd.periods = [...(c.periods || []), { start: c.startAt, end: at }];
   Object.assign(c, upd);
   scheduleRender();
@@ -871,25 +981,48 @@ function switchRow(name, title, text, checked) {
 function openCounterEditor(counter = null, preset = {}) {
   const base = counter || {
     name: "", icon: "hourglass-half", color: COLORS[0], categoryId: null,
-    startAt: Date.now(), units: ["days"], display: "totals",
+    mode: "since", startAt: C.startOfDay(Date.now()), allDay: true, repeat: false,
+    units: ["days"], display: "totals",
     resettable: true, history: false, notify: true,
     ...preset
   };
+  const cdBase = isCd(base);
+  // Les anciens compteurs (sans allDay) restent à l'heure près
+  const allDay = !!base.allDay;
+  const when = cdBase ? (base.targetAt ?? nextAnnual(11, 25)) : base.startAt;
   const units = unitsOf(base);
   const catId = categoryById(base.categoryId)?.id || "";
-
   const body = `
     <form class="form" novalidate>
+      <fieldset class="field">
+        <legend class="field-label">Type</legend>
+        <div class="seg">
+          <label><input type="radio" name="mode" value="since" ${cdBase ? "" : "checked"}><span>Depuis une date</span></label>
+          <label><input type="radio" name="mode" value="countdown" ${cdBase ? "checked" : ""}><span>Jusqu’à une date</span></label>
+        </div>
+      </fieldset>
+
       <label class="field">
         <span class="field-label">Nom</span>
         <input name="name" value="${esc(base.name)}" maxlength="60" placeholder="${base.icon === "baby" ? "Ex. Naissance de Léa" : "Ex. Sans alcool"}" autocomplete="off" required>
       </label>
 
-      <label class="field">
-        <span class="field-label">Point de départ</span>
-        <input name="startAt" type="datetime-local" value="${toLocalInput(base.startAt)}" required>
-        <span class="hint">Une date passée fonctionne aussi, comme une naissance.</span>
-      </label>
+      <div class="field">
+        <span class="field-label" data-when-label>${cdBase ? "Date visée" : "Point de départ"}</span>
+        <div class="quick-dates ${cdBase ? "" : "hidden"}" data-quick>
+          ${QUICK_DATES.map((q, i) => `<button type="button" class="quick-date" data-quick-i="${i}"><i class="fa-solid fa-${q.icon}"></i>${esc(q.name)}</button>`).join("")}
+        </div>
+        <input name="day" type="date" value="${toLocalDay(when)}" aria-label="Jour" class="${allDay ? "" : "hidden"}">
+        <input name="datetime" type="datetime-local" value="${toLocalInput(when)}" aria-label="Jour et heure" class="${allDay ? "hidden" : ""}">
+        <span class="hint" data-when-hint>${cdBase ? "Le décompte se fait en jours jusqu’à cette date." : "Une date passée fonctionne aussi, comme une naissance."}</span>
+      </div>
+
+      <div class="switch-list">
+        ${switchRow("timed", "Heure précise", "Sinon, on compte à la journée.", !allDay)}
+        <div data-only-cd class="${cdBase ? "" : "hidden"}">
+          ${switchRow("repeat", "Chaque année", "Une fois le jour J passé, le décompte repart pour l’année suivante.", !!base.repeat)}
+        </div>
+      </div>
 
       <fieldset class="field">
         <legend class="field-label">Afficher en</legend>
@@ -938,54 +1071,116 @@ function openCounterEditor(counter = null, preset = {}) {
       </fieldset>
 
       <div class="switch-list">
-        ${switchRow("resettable", "Remise à zéro", "Un bouton pour repartir de zéro, avec confirmation.", base.resettable !== false)}
-        ${switchRow("history", "Historique des séries", "Garde chaque série arrêtée et affiche ton record.", !!base.history)}
-        ${switchRow("notify", "Notifier les grands caps", "100 jours, 1 an, 1 000 jours…", base.notify !== false)}
+        <div data-only-since class="${cdBase ? "hidden" : ""}">
+          ${switchRow("resettable", "Remise à zéro", "Un bouton pour repartir de zéro, avec confirmation.", base.resettable !== false)}
+          ${switchRow("history", "Historique des séries", "Garde chaque série arrêtée et affiche ton record.", !!base.history)}
+        </div>
+        ${switchRow("notify", "Notifier les étapes", cdBase ? "J-30, J-7, J-1 et le jour J." : "100 jours, 1 an, 1 000 jours…", base.notify !== false)}
       </div>
 
       <p class="field-error hidden" data-error role="alert"></p>
-
-      ${counter ? `<button type="button" class="btn btn-danger-ghost btn-block danger-zone" data-delete><i class="fa-solid fa-trash-can"></i> Supprimer ce compteur</button>` : ""}
+      ${counter ? `<button type="button" class="btn btn-danger-ghost btn-block danger-zone" data-delete><i class="fa-solid fa-trash-can"></i> Supprimer ${cdBase ? "ce décompte" : "ce compteur"}</button>` : ""}
     </form>`;
 
-  const footer = `<button type="button" class="btn btn-primary btn-block" data-save>${counter ? "Enregistrer" : "Créer le compteur"}</button>`;
-
+  const footer = `<button type="button" class="btn btn-primary btn-block" data-save>${counter ? "Enregistrer" : "Créer"}</button>`;
   let initial = "";
   const serialize = form => JSON.stringify([...new FormData(form).entries()]);
 
   openSheet({
-    title: counter ? "Modifier le compteur" : "Nouveau compteur",
+    title: counter ? (cdBase ? "Modifier le décompte" : "Modifier le compteur") : "Nouveau compteur",
     body, footer,
     isDirty: () => serialize($("form", sheetStack[sheetStack.length - 1].el)) !== initial,
     onMount(el, entry) {
       const form = $("form", el);
+      const f = form.elements;
       initial = serialize(form);
 
       const readUnits = () => $$("input[name=units]:checked", form).map(i => i.value);
+      const mode = () => f.mode.value === "countdown" ? "countdown" : "since";
+      // Jour seul → minuit, heure locale
+      const readWhen = () => f.timed.checked
+        ? new Date(f.datetime.value).getTime()
+        : (f.day.value ? new Date(`${f.day.value}T00:00`).getTime() : NaN);
+
+      const syncMode = () => {
+        const cd = mode() === "countdown";
+        $("[data-when-label]", form).textContent = cd ? "Date visée" : "Point de départ";
+        $("[data-when-hint]", form).textContent = cd
+          ? "Le décompte se fait en jours jusqu’à cette date."
+          : "Une date passée fonctionne aussi, comme une naissance.";
+        $("[data-quick]", form).classList.toggle("hidden", !cd);
+        $("[data-only-cd]", form).classList.toggle("hidden", !cd);
+        $("[data-only-since]", form).classList.toggle("hidden", cd);
+        $("input[name=notify]", form).closest(".switch-row").querySelector(".switch-text span").textContent =
+          cd ? "J-30, J-7, J-1 et le jour J." : "100 jours, 1 an, 1 000 jours…";
+        f.name.placeholder = cd ? "Ex. Vacances d’été" : "Ex. Sans alcool";
+      };
+
+      const syncTimed = () => {
+        const timed = f.timed.checked;
+        if (timed && f.day.value) {
+          // Compteur démarré aujourd'hui : l'heure actuelle ; sinon minuit
+          const isToday = f.day.value === toLocalDay(Date.now());
+          const hhmm = isToday && mode() === "since" ? toLocalInput(Date.now()).slice(11) : "00:00";
+          f.datetime.value = `${f.day.value}T${hhmm}`;
+        } else if (!timed && f.datetime.value) {
+          f.day.value = f.datetime.value.slice(0, 10);
+        }
+        f.day.classList.toggle("hidden", timed);
+        f.datetime.classList.toggle("hidden", !timed);
+      };
+
       const updatePreview = () => {
-        const start = new Date(form.elements.startAt.value).getTime();
+        const t = readWhen();
         const us = readUnits();
         const prev = $("[data-preview]", form);
         if (!us.length) { prev.textContent = "Choisis au moins une unité."; return; }
-        if (Number.isNaN(start)) { prev.textContent = "Indique un point de départ."; return; }
+        if (Number.isNaN(t)) { prev.textContent = "Indique une date."; return; }
         const now = Date.now();
-        const sample = start <= now ? start : now - (1234 * C.DAY + 5 * C.HOUR);
-        prev.textContent = `${start <= now ? "Aujourd’hui" : "Par exemple"} : ${unitsText({ startAt: sample, units: us, display: form.elements.display.value }, now)}`;
+        const sample = { units: us, display: f.display.value, allDay: !f.timed.checked };
+        if (mode() === "countdown") {
+          const c = { ...sample, mode: "countdown", targetAt: t, repeat: f.repeat.checked };
+          const st = cdState(c, now);
+          if (st.past) { prev.textContent = "Cette date est passée : choisis une date à venir ou active « Chaque année »."; return; }
+          prev.textContent = st.today ? "C’est aujourd’hui : jour J !" : `Aujourd’hui : J-${fmtInt(st.d)}, ${unitsText(c, now)}`;
+          return;
+        }
+        const start = t <= now ? t : now - (1234 * C.DAY + 5 * C.HOUR);
+        prev.textContent = `${t <= now ? "Aujourd’hui" : "Par exemple"} : ${unitsText({ ...sample, startAt: start }, now)}`;
       };
+
       form.addEventListener("input", updatePreview);
-      form.addEventListener("change", updatePreview);
+      form.addEventListener("change", e => {
+        if (e.target.name === "mode") syncMode();
+        if (e.target.name === "timed") syncTimed();
+        updatePreview();
+      });
       updatePreview();
 
-      form.elements.category.addEventListener("change", () => {
-        const isNew = form.elements.category.value === "__new";
+      // Raccourcis : Noël, Nouvel an…
+      $$("[data-quick-i]", form).forEach(btn => btn.addEventListener("click", () => {
+        const q = QUICK_DATES[+btn.dataset.quickI];
+        const t = nextAnnual(q.month, q.day);
+        f.day.value = toLocalDay(t);
+        f.datetime.value = toLocalInput(t);
+        const name = f.name.value.trim();
+        if (!name || QUICK_DATES.some(x => x.name === name)) f.name.value = q.name;
+        f.repeat.checked = true;
+        const ic = $(`input[name=icon][value="${q.icon}"]`, form);
+        if (ic) ic.checked = true;
+        updatePreview();
+      }));
+
+      f.category.addEventListener("change", () => {
+        const isNew = f.category.value === "__new";
         $("[data-newcat]", form).classList.toggle("hidden", !isNew);
-        if (isNew) form.elements.newCategory.focus();
+        if (isNew) f.newCategory.focus();
       });
 
       $("[data-delete]", form)?.addEventListener("click", () => deleteCounter(counter, entry));
       form.addEventListener("submit", e => { e.preventDefault(); save(); });
       $("[data-save]", el).addEventListener("click", save);
-      if (!counter) setTimeout(() => form.elements.name.focus(), 260);
+      if (!counter) setTimeout(() => f.name.focus(), 260);
 
       function fail(msg, input) {
         const err = $("[data-error]", form);
@@ -996,18 +1191,20 @@ function openCounterEditor(counter = null, preset = {}) {
       }
 
       function save() {
-        const name = form.elements.name.value.trim();
-        const startAt = new Date(form.elements.startAt.value).getTime();
+        const name = f.name.value.trim();
+        const t = readWhen();
         const us = readUnits();
-        if (!name) return fail("Donne un nom au compteur.", form.elements.name);
-        if (Number.isNaN(startAt)) return fail("Indique un point de départ valide.", form.elements.startAt);
+        const cd = mode() === "countdown";
+        const timed = f.timed.checked;
+        if (!name) return fail(cd ? "Donne un nom au décompte." : "Donne un nom au compteur.", f.name);
+        if (Number.isNaN(t)) return fail("Indique une date valide.", timed ? f.datetime : f.day);
         if (!us.length) return fail("Choisis au moins une unité d’affichage.");
 
         const batch = writeBatch(db);
-        let categoryId = form.elements.category.value || null;
+        let categoryId = f.category.value || null;
         if (categoryId === "__new") {
-          const catName = form.elements.newCategory.value.trim();
-          if (!catName) return fail("Donne un nom à la nouvelle catégorie.", form.elements.newCategory);
+          const catName = f.newCategory.value.trim();
+          if (!catName) return fail("Donne un nom à la nouvelle catégorie.", f.newCategory);
           categoryId = newId();
           batch.set(userDoc("categories", categoryId), {
             name: catName,
@@ -1019,16 +1216,25 @@ function openCounterEditor(counter = null, preset = {}) {
 
         const data = {
           name,
-          startAt,
+          mode: cd ? "countdown" : "since",
+          allDay: !timed,
+          repeat: cd && f.repeat.checked,
           units: UNIT_ASC.filter(u => us.includes(u)),
-          display: form.elements.display.value === "breakdown" ? "breakdown" : "totals",
-          icon: form.elements.icon.value || "hourglass-half",
-          color: form.elements.color.value || COLORS[0],
+          display: f.display.value === "breakdown" ? "breakdown" : "totals",
+          icon: f.icon.value || "hourglass-half",
+          color: f.color.value || COLORS[0],
           categoryId,
-          resettable: form.elements.resettable.checked,
-          history: form.elements.history.checked,
-          notify: form.elements.notify.checked
+          resettable: f.resettable.checked,
+          history: f.history.checked,
+          notify: f.notify.checked
         };
+        if (cd) {
+          data.targetAt = t;
+          // Pour un décompte, startAt = sa création (repère du « chemin parcouru » et des notifications)
+          data.startAt = counter && isCd(counter) ? counter.startAt : Date.now();
+        } else {
+          data.startAt = t;
+        }
 
         if (counter) {
           if ((categoryById(counter.categoryId)?.id || null) !== categoryId) data.order = nextOrder(categoryId);
@@ -1041,8 +1247,11 @@ function openCounterEditor(counter = null, preset = {}) {
             createdAt: serverTimestamp()
           });
         }
-        entry.close(() => persist(batch.commit(), counter ? "Compteur enregistré" : "Compteur créé"));
+        const what = cd ? "Décompte" : "Compteur";
+        entry.close(() => persist(batch.commit(), counter ? `${what} enregistré` : `${what} créé`));
       }
+
+      syncMode();
     }
   });
 }
@@ -1159,7 +1368,7 @@ function renderCaps() {
   const now = Date.now();
   const items = [];
   for (const c of state.counters) {
-    for (const m of C.upcoming(c.startAt, now, 4)) items.push({ c, m });
+    for (const m of C.upcomingFor(c, now, 4)) items.push({ c, m });
   }
   items.sort((a, b) => a.m.at - b.m.at);
   const list = items.slice(0, 30);
@@ -1181,7 +1390,7 @@ function renderCaps() {
 
   $("#view").innerHTML = `
     <h2 class="display">À venir</h2>
-    <p class="lead">Les prochains grands caps de tes compteurs : 100 jours, 6 mois, 1 an, 1 000 jours…</p>
+    <p class="lead">Les prochains grands caps de tes compteurs (100 jours, 6 mois, 1 an…) et les étapes de tes décomptes (J-30, J-7, jour J).</p>
     ${notifBlockHtml()}
     ${list.length ? `<ul class="caps-list">${rows}</ul>` : `<p class="block muted">Crée un compteur pour voir arriver ses caps.</p>`}`;
   bindNotifBlock($("#view"));
@@ -1340,10 +1549,13 @@ function startListeners() {
   }, onError));
   state.unsub.push(onSnapshot(userCol("counters"), snap => {
     state.counters = snap.docs.map(d => ({ id: d.id, ...d.data() }))
-      .filter(c => typeof c.startAt === "number");
+      .filter(c => typeof c.startAt === "number" && (!C.isCountdown(c) || typeof c.targetAt === "number"));
     state.ready.counters = true;
     scheduleRender();
-    syncCounters(state.counters.map(c => ({ id: c.id, name: c.name, startAt: c.startAt, notify: c.notify !== false })));
+    syncCounters(state.counters.map(c => ({
+      id: c.id, name: c.name, startAt: c.startAt, notify: c.notify !== false,
+      mode: c.mode || "since", targetAt: c.targetAt ?? null, repeat: !!c.repeat
+    })));
   }, onError));
 }
 

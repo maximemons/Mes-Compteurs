@@ -92,6 +92,7 @@ export async function checkNow() {
   if (!due.length) return;
   for (const d of due) {
     seen.add(d.seenKey);
+    if (d.silent) continue;
     const n = C.notificationFor(d);
     try { await show(n.title, n.options); } catch (err) { console.warn(err); }
   }
@@ -105,7 +106,7 @@ function schedule() {
   let next = Infinity;
   for (const c of snapshot) {
     if (c.notify === false) continue;
-    const m = C.upcoming(c.startAt, now, 1)[0];
+    const m = C.upcomingFor(c, now, 1)[0];
     if (m && m.at < next) next = m.at;
   }
   const delay = Math.min(Math.max(next - now + 1000, 1000), MAX_DELAY);

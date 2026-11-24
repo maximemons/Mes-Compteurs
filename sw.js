@@ -17,6 +17,7 @@ async function checkMilestones() {
   if (!due.length) return;
   for (const d of due) {
     seen.add(d.seenKey);
+    if (d.silent) continue;
     const n = C.notificationFor(d);
     await self.registration.showNotification(n.title, n.options);
   }

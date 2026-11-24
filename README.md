@@ -1,10 +1,11 @@
 # Mes compteurs
 
-Le temps qui passe, objectif par objectif : jours sans alcool, semaines depuis une naissance, années depuis un déménagement. Pensé pour le téléphone, installable comme une appli.
+Le temps qui passe, objectif par objectif : jours sans alcool, semaines depuis une naissance, années depuis un déménagement. Et le temps qui reste : jours avant Noël, avant les vacances. Pensé pour le téléphone, installable comme une appli.
 
 ## Les compteurs
 
-- Chaque compteur a un nom, une icône, une couleur et un **point de départ** (date et heure). Une date passée fonctionne aussi : une naissance, un mariage, un arrêt.
+- Chaque compteur a un nom, une icône, une couleur et un **point de départ**. Une date passée fonctionne aussi : une naissance, un mariage, un arrêt.
+- **À la journée par défaut** : on choisit juste un jour, sans heure. L’option **Heure précise** permet de compter à la minute près (le chrono à la seconde n’apparaît alors que pour ces compteurs). Une remise à zéro d’un compteur à la journée repart de minuit.
 - **Afficher en** : heures, jours, semaines, mois, années, une ou plusieurs unités à la fois.
 - **Présentation** :
   - **Chaque total** : chaque unité compte depuis le départ (ex. `1 353 jours · 193 semaines · 3 ans`) ;
@@ -12,6 +13,17 @@ Le temps qui passe, objectif par objectif : jours sans alcool, semaines depuis u
 - Les mois et années suivent le calendrier (le 12 mars → le 12 avril = 1 mois), les jours tiennent compte des changements d’heure.
 - Sur la page d’un compteur, les valeurs en grand et un chrono qui avance à la seconde (`+ 5 h 03 min 12 s`).
 - Au premier lancement, trois modèles sont proposés : Sans alcool, Sans cigarette, Depuis une naissance.
+
+## Décomptes
+
+- Dans l’éditeur, **Type** › **Jusqu’à une date** transforme le compteur en décompte : « Noël, encore 31 jours ».
+- Raccourcis : Noël, Nouvel an, Saint-Valentin, 14 Juillet, Halloween (date, nom et icône remplis d’un coup).
+- **Chaque année** : une fois le jour J passé, le décompte repart tout seul pour l’année suivante.
+- À la journée, le décompte part de minuit : le 24 novembre, Noël est à **J-31** et il reste 31 jours. Avec une heure précise, il descend à la seconde (`et 4 h 29 min 58 s`).
+- Sur la carte : `J-31 · le 25 décembre`, une pastille **Jour J** le jour venu. Sur la page : le chemin parcouru depuis la dernière occurrence (ou depuis la création) et la prochaine étape.
+- Étapes suivies et notifiées : **J-100, J-30, J-7, J-1** (au début du jour) puis le **jour J**. Si plusieurs étapes arrivent d’un coup, seule la plus récente est notifiée.
+- Pas de remise à zéro ni d’historique pour un décompte. Un décompte ponctuel passé l’indique et propose de changer la date.
+- Modèle « Jusqu’à Noël » proposé au premier lancement.
 
 ## Catégories
 
@@ -103,6 +115,12 @@ Données Firestore :
 ```
 users/{uid}/categories/{id}  nom, couleur, ordre
 users/{uid}/counters/{id}    nom, icône, couleur, catégorie, ordre, départ (startAt, ms),
+                             type (mode : "since" | "countdown"), à la journée (allDay),
+                             date visée (targetAt, ms) et chaque année (repeat) pour un décompte,
                              unités, présentation, remise à zéro, historique, notifications,
                              séries passées (periods : [{ start, end }])
+
+Pour un décompte, startAt est la date de création (repère du chemin parcouru et
+des notifications). Les compteurs existants sans mode ni allDay restent des
+compteurs « depuis », à l’heure près.
 ```
