@@ -570,3 +570,87 @@ body.is-dragging, body.is-dragging * { user-select: none; -webkit-user-select: n
   font-size: clamp(2.4rem, 11vw, 3.6rem); line-height: 1.05; color: var(--c);
 }
 .next-cap > .muted strong { color: var(--ink); }
+
+/* ---------- Photos ---------- */
+
+/* Image cassée (lien mort) : on montre la solution de secours */
+.pp-broken { display: none; }
+.is-broken > img { display: none; }
+.is-broken > .pp-broken {
+  display: grid; place-items: center; gap: 6px; width: 100%; height: 100%;
+  color: var(--muted); font-size: .84rem; font-weight: 600; text-align: center; padding: 8px;
+}
+
+/* Miniature sur la carte : la photo remplace l'icône, rappelée dans une pastille */
+.counter-thumb { position: relative; width: 52px; height: 52px; }
+.counter-thumb img {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  object-fit: cover; border-radius: inherit; pointer-events: none;
+}
+.thumb-dot {
+  position: absolute; right: -5px; bottom: -5px;
+  width: 22px; height: 22px; border-radius: 50%;
+  display: grid; place-items: center;
+  background: var(--c); color: #fff; font-size: .62rem;
+  border: 2px solid var(--surface);
+}
+.counter-thumb.is-broken img, .counter-thumb.is-broken .thumb-dot { display: none; }
+
+/* En tête de page */
+.hero-cover {
+  position: relative; width: 100%; aspect-ratio: 16 / 10; padding: 0; margin-bottom: 4px;
+  border: 0; border-radius: var(--r-lg); overflow: hidden; background: var(--surface-2);
+}
+.hero-cover img { width: 100%; height: 100%; object-fit: cover; }
+@media (min-width: 560px) { .hero-cover { aspect-ratio: 2 / 1; } }
+
+/* Galerie */
+.block-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
+.block-head .block-title { margin: 0; display: flex; align-items: baseline; gap: 8px; }
+.photo-grid {
+  list-style: none; margin: 0; padding: 0;
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px;
+}
+@media (min-width: 560px) { .photo-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+.photo-tile {
+  position: relative; display: block; width: 100%; aspect-ratio: 1; padding: 0;
+  border: 0; border-radius: 12px; overflow: hidden; background: var(--surface-2);
+}
+.photo-tile img { width: 100%; height: 100%; object-fit: cover; }
+.photo-date {
+  position: absolute; left: 0; right: 0; bottom: 0; padding: 18px 7px 5px;
+  background: linear-gradient(transparent, rgba(0, 0, 0, .62));
+  color: #fff; font-size: .72rem; font-weight: 700; text-align: left;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.photo-star, .photo-kind {
+  position: absolute; top: 6px; width: 22px; height: 22px; border-radius: 50%;
+  display: grid; place-items: center; font-size: .64rem; color: #fff;
+}
+.photo-star { right: 6px; background: var(--cap); }
+.photo-kind { left: 6px; background: rgba(0, 0, 0, .5); }
+.photo-tile.is-broken .photo-date { background: none; color: var(--muted); }
+
+/* Visionneuse */
+.photo-full {
+  margin: 0; min-height: 160px; border-radius: var(--r-md); overflow: hidden;
+  display: grid; place-items: center; background: var(--surface-2);
+}
+.photo-full img { width: 100%; max-height: 58vh; object-fit: contain; }
+.photo-meta { color: var(--muted); font-size: .92rem; font-weight: 600; }
+
+/* Sélecteur de photo */
+.pp { display: flex; flex-direction: column; gap: 10px; }
+.pp-preview {
+  position: relative; width: 112px; aspect-ratio: 1; border-radius: 16px; overflow: hidden;
+  background: var(--surface-2); border: 1px solid var(--line);
+}
+.pp-preview img { width: 100%; height: 100%; object-fit: cover; }
+.pp-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.pp-link { display: flex; flex-direction: column; gap: 8px; }
+.pp-busy { display: flex; align-items: center; gap: 8px; }
+
+.inline-link {
+  border: 0; background: none; padding: 0; color: var(--primary); font: inherit; font-weight: 700;
+  text-decoration: underline; text-underline-offset: 3px; cursor: pointer;
+}

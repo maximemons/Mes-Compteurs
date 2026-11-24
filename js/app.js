@@ -15,6 +15,8 @@ import {
   collection,
   doc,
   onSnapshot,
+  getDoc,
+  getDocs,
   updateDoc,
   deleteDoc,
   writeBatch,
@@ -114,6 +116,13 @@ const plural = (n, one, many) => (Math.abs(n) < 2 ? one : many);
 
 const userCol = name => collection(db, "users", state.user.uid, name);
 const userDoc = (name, id) => doc(db, "users", state.user.uid, name, id);
+
+// Photos d'un compteur : métadonnées + miniature dans « photos », image complète dans « photoFiles »
+// (chargée seulement à l'affichage, pour garder la galerie légère).
+const photosCol = cid => collection(db, "users", state.user.uid, "counters", cid, "photos");
+const photoDoc = (cid, pid) => doc(db, "users", state.user.uid, "counters", cid, "photos", pid);
+const photoFilesCol = cid => collection(db, "users", state.user.uid, "counters", cid, "photoFiles");
+const photoFileDoc = (cid, pid) => doc(db, "users", state.user.uid, "counters", cid, "photoFiles", pid);
 
 const counterById = id => state.counters.find(c => c.id === id);
 const categoryById = id => state.categories.find(c => c.id === id) || null;
@@ -462,6 +471,7 @@ function render() {
   if (!state.user) return;
   if (drag.active) { renderDeferred = true; return; }
   const route = parseRoute();
+  watchPhotos(route.page === "counter" ? route.id : null);
   setActiveTab(route.page === "caps" ? "caps" : "home");
   if (!state.ready.categories || !state.ready.counters) return renderLoading();
 
@@ -575,7 +585,7 @@ function cardHtml(c, now) {
   const jourJ = cd && cdState(c, now).today;
   return `
     <article class="counter-card" data-id="${esc(c.id)}" style="--c:${esc(c.color || COLORS[0])}" tabindex="0" aria-label="${esc(c.name)} : ${esc(unitsText(c, now))}">
-      <span class="counter-badge"><i class="fa-solid fa-${esc(c.icon || "hourglass-half")}"></i></span>
+      ${badgeHtml(c)}
       <div class="counter-main">
         <div class="counter-top">
           <strong class="counter-name">${esc(c.name)}</strong>
@@ -798,6 +808,7 @@ function renderCounter(c) {
 
   $("#view").innerHTML = `
     <section class="hero" style="--c:${esc(c.color || COLORS[0])}">
+      ${coverHtml(c)}
       <span class="counter-badge counter-badge--lg"><i class="fa-solid fa-${esc(c.icon || "hourglass-half")}"></i></span>
       ${unitsHtml(c, now, "units--hero")}
       ${c.allDay ? "" : `<p class="ticker" data-ticker="${esc(c.id)}">${esc(tickerText(c, now))}</p>`}
@@ -827,9 +838,12 @@ function renderCounter(c) {
       </div>
     </section>` : ""}
 
+    ${photosHtml(c)}
+
     ${historyHtml(c, now)}`;
 
   const view = $("#view");
+  bindPhotos(view, c);
   $("[data-reset]", view)?.addEventListener("click", () => resetCounter(c));
   $("[data-enable-history]", view)?.addEventListener("click", () => {
     persist(updateDoc(userDoc("counters", c.id), { history: true }), "Historique activé");
@@ -847,6 +861,7 @@ function renderCountdown(c, now) {
 
   $("#view").innerHTML = `
     <section class="hero" style="--c:${esc(c.color || COLORS[0])}">
+      ${coverHtml(c)}
       <span class="counter-badge counter-badge--lg"><i class="fa-solid fa-${esc(c.icon || "hourglass-half")}"></i></span>
       ${today || past ? `<p class="cd-done">${today ? "C’est aujourd’hui !" : "C’est passé."}</p>` : `
       <p class="cd-label">Encore</p>
@@ -866,9 +881,12 @@ function renderCountdown(c, now) {
       </div>
       <div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(pct)}" aria-label="Chemin parcouru jusqu’au jour J"><span style="width:${pct.toFixed(1)}%"></span></div>
       ${showNext ? `<p class="muted">Prochaine étape : <strong>${esc(next.label)}</strong>, ${esc(fmtIn(next.at, now))}.</p>` : ""}
-    </section>`}`;
+    </section>`}
+
+    ${photosHtml(c)}`;
 
   $("[data-edit]", $("#view"))?.addEventListener("click", () => openCounterEditor(c));
+  bindPhotos($("#view"), c);
 }
 
 function historyHtml(c, now) {
@@ -922,6 +940,490 @@ function historyHtml(c, now) {
 }
 
 /* =========================================================
+   Photos : illustration (miniature sur la carte) et suivi daté
+   ========================================================= */
+
+const MAX_DATA = 900000;  // taille max d'une image en base64 (un document Firestore fait 1 Mo au plus)
+const FULL_SIDE = 1600;   // grand côté de l'image enregistrée
+const THUMB_SIDE = 320;   // miniature carrée
+const fullCache = new Map(); // photoId → image complète (data URL ou lien)
+
+const photos = { cid: null, list: [], ready: false, unsub: null };
+
+// Écoute les photos du compteur affiché (et seulement celui-là)
+function watchPhotos(cid) {
+  if (photos.cid === cid) return;
+  photos.unsub?.();
+  Object.assign(photos, { cid, list: [], ready: false, unsub: null });
+  if (!cid || !state.user) return;
+  photos.unsub = onSnapshot(photosCol(cid), snap => {
+    if (photos.cid !== cid) return;
+    photos.list = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(p => typeof p.takenAt === "number");
+    photos.ready = true;
+    scheduleRender();
+  }, err => {
+    console.error(err);
+    photos.ready = true;
+    toast(errorMessage(err), true);
+  });
+}
+
+const createdMs = p => p.createdAt?.toMillis?.() ?? Number.MAX_SAFE_INTEGER;
+const sortedPhotos = () => [...photos.list].sort((a, b) => (b.takenAt - a.takenAt) || (createdMs(b) - createdMs(a)));
+const photoById = id => photos.list.find(p => p.id === id) || null;
+const photoSrc = p => p.kind === "link" ? p.url : (fullCache.get(p.id) || p.thumb);
+const safeLink = u => /^https?:\/\//i.test(String(u || ""));
+
+// Une image qui ne charge pas (lien mort) : on bascule sur l'affichage de secours
+document.addEventListener("error", e => {
+  const img = e.target;
+  if (img instanceof HTMLImageElement && img.hasAttribute("data-fallback")) img.closest("[data-thumb]")?.classList.add("is-broken");
+}, true);
+
+// Date choisie → instant : aujourd'hui = maintenant (ordre des photos du jour), sinon midi
+function dayToTime(day) {
+  if (day === toLocalDay(Date.now())) return Date.now();
+  return new Date(`${day}T12:00`).getTime();
+}
+
+/* ------------------------------------------------ Préparation des images */
+
+function loadImage(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => resolve({ img, url });
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("decode")); };
+    img.src = url;
+  });
+}
+
+function toJpeg(img, w, h, quality, crop) {
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(w));
+  canvas.height = Math.max(1, Math.round(h));
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#fff"; // fond blanc pour les PNG transparents
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  const [sx, sy, sw, sh] = crop || [0, 0, img.naturalWidth, img.naturalHeight];
+  ctx.drawImage(img, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL("image/jpeg", quality);
+}
+
+// Réduit la photo (grand côté 1 600 px, JPEG) jusqu'à tenir dans un document Firestore,
+// et prépare une miniature carrée.
+async function processImage(file) {
+  const { img, url } = await loadImage(file);
+  try {
+    const W = img.naturalWidth, H = img.naturalHeight;
+    if (!W || !H) throw new Error("empty");
+    let side = FULL_SIDE, q = 0.82, data = "";
+    for (let i = 0; i < 10; i++) {
+      const s = Math.min(1, side / Math.max(W, H));
+      data = toJpeg(img, W * s, H * s, q);
+      if (data.length <= MAX_DATA) break;
+      if (q > 0.62) q -= 0.1; else side = Math.round(side * 0.8);
+    }
+    if (data.length > MAX_DATA) throw new Error("too-big");
+    const sq = Math.min(W, H);
+    const thumb = toJpeg(img, Math.min(THUMB_SIDE, sq), Math.min(THUMB_SIDE, sq), 0.72, [(W - sq) / 2, (H - sq) / 2, sq, sq]);
+    const s = Math.min(1, side / Math.max(W, H));
+    return { data, thumb, w: Math.round(W * s), h: Math.round(H * s) };
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+// Vérifie qu'un lien mène bien à une image affichable
+function probeImage(url) {
+  return new Promise(resolve => {
+    const img = new Image();
+    const timer = setTimeout(() => { img.src = ""; resolve(false); }, 10000);
+    img.referrerPolicy = "no-referrer";
+    img.onload = () => { clearTimeout(timer); resolve(true); };
+    img.onerror = () => { clearTimeout(timer); resolve(false); };
+    img.src = url;
+  });
+}
+
+/* ------------------------------------------------ Sélecteur : appareil photo, galerie ou lien */
+
+function mountPhotoPicker(box, { current = null, allowRemove = false, onChange = () => {} } = {}) {
+  let pending = null;   // { kind: "file", data, thumb, w, h, fileDate } | { kind: "link", url }
+  let removed = false;
+  let mode = "idle";    // idle | link | busy
+  let error = "";
+  const touch = matchMedia("(pointer: coarse)").matches;
+
+  const shown = () => pending ? (pending.thumb || pending.url) : (!removed && current?.src ? current.src : null);
+
+  function draw() {
+    const src = shown();
+    const canRemove = allowRemove && !!src;
+    box.innerHTML = `
+      <div class="pp">
+        ${src ? `
+        <div class="pp-preview" data-thumb>
+          <img src="${esc(src)}" alt="Aperçu" referrerpolicy="no-referrer" data-fallback>
+          <span class="pp-broken"><i class="fa-solid fa-image"></i></span>
+        </div>` : ""}
+        ${mode === "busy" ? `<p class="muted pp-busy"><i class="fa-solid fa-spinner fa-spin"></i> Préparation de la photo…</p>`
+        : mode === "link" ? `
+        <div class="pp-link">
+          <input type="url" inputmode="url" placeholder="https://…/photo.jpg" aria-label="Lien de l’image" data-pp-url autocomplete="off">
+          <div class="pp-actions">
+            <button type="button" class="btn btn-primary btn-small" data-pp-ok>Utiliser ce lien</button>
+            <button type="button" class="btn btn-ghost btn-small" data-pp-cancel>Annuler</button>
+          </div>
+        </div>` : `
+        <div class="pp-actions">
+          ${touch ? `<button type="button" class="btn btn-ghost btn-small" data-pp-camera><i class="fa-solid fa-camera"></i> Prendre une photo</button>` : ""}
+          <button type="button" class="btn btn-ghost btn-small" data-pp-file><i class="fa-solid fa-image"></i> ${touch ? "Galerie" : (src ? "Changer d’image" : "Choisir une image")}</button>
+          <button type="button" class="btn btn-ghost btn-small" data-pp-link><i class="fa-solid fa-link"></i> Lien</button>
+          ${canRemove ? `<button type="button" class="btn btn-danger-ghost btn-small" data-pp-remove><i class="fa-solid fa-xmark"></i> Retirer</button>` : ""}
+        </div>`}
+        <p class="field-error ${error ? "" : "hidden"}" role="alert">${esc(error)}</p>
+        <input type="file" accept="image/*" capture="environment" hidden data-pp-in-camera>
+        <input type="file" accept="image/*" hidden data-pp-in-file>
+      </div>`;
+    if (mode === "link") setTimeout(() => $("[data-pp-url]", box)?.focus(), 0);
+  }
+
+  async function takeFile(input) {
+    const file = input.files?.[0];
+    input.value = "";
+    if (!file) return;
+    if (file.type && !file.type.startsWith("image/")) { error = "Ce fichier n’est pas une image."; draw(); return; }
+    mode = "busy"; error = ""; draw();
+    try {
+      const r = await processImage(file);
+      pending = { kind: "file", ...r, fileDate: file.lastModified || null };
+      removed = false;
+    } catch (err) {
+      console.error(err);
+      error = err.message === "too-big"
+        ? "Cette image est trop lourde, même réduite. Essaie une autre photo."
+        : "Impossible de lire cette image. Essaie une photo JPEG ou PNG.";
+    }
+    mode = "idle"; draw(); onChange(pending);
+  }
+
+  async function takeLink() {
+    const raw = $("[data-pp-url]", box)?.value.trim() || "";
+    let url;
+    try { url = new URL(raw); } catch { url = null; }
+    if (!url || !/^https?:$/.test(url.protocol) || raw.length > 2000) {
+      error = "Colle un lien complet qui commence par https://"; draw(); return;
+    }
+    mode = "busy"; error = ""; draw();
+    const ok = await probeImage(url.href);
+    if (ok) { pending = { kind: "link", url: url.href }; removed = false; mode = "idle"; }
+    else { error = "Ce lien n’affiche pas d’image. Il doit mener directement au fichier (.jpg, .png, .webp…)."; mode = "link"; }
+    draw();
+    if (mode === "link") $("[data-pp-url]", box).value = raw;
+    onChange(pending);
+  }
+
+  box.addEventListener("click", e => {
+    const b = e.target.closest("button");
+    if (!b || mode === "busy") return;
+    if (b.matches("[data-pp-camera]")) $("[data-pp-in-camera]", box).click();
+    else if (b.matches("[data-pp-file]")) $("[data-pp-in-file]", box).click();
+    else if (b.matches("[data-pp-link]")) { mode = "link"; error = ""; draw(); }
+    else if (b.matches("[data-pp-cancel]")) { mode = "idle"; error = ""; draw(); }
+    else if (b.matches("[data-pp-ok]")) takeLink();
+    else if (b.matches("[data-pp-remove]")) { pending = null; removed = !!current; error = ""; draw(); onChange(null); }
+  });
+  box.addEventListener("keydown", e => {
+    if (e.key === "Enter" && e.target.matches("[data-pp-url]")) { e.preventDefault(); takeLink(); }
+  });
+  box.addEventListener("change", e => {
+    if (e.target.matches("input[type=file]")) takeFile(e.target);
+  });
+  draw();
+
+  return {
+    get pending() { return pending; },
+    get removed() { return removed && !pending; },
+    get busy() { return mode === "busy"; },
+    get dirty() { return !!pending || removed; }
+  };
+}
+
+/* ------------------------------------------------ Écritures */
+
+// Ajoute une photo au lot d'écritures ; renvoie la référence d'illustration correspondante
+function addPhotoToBatch(batch, cid, pending, { takenAt, caption = "" }) {
+  const pid = newId();
+  const meta = { kind: pending.kind, takenAt, caption, createdAt: serverTimestamp() };
+  if (pending.kind === "file") {
+    Object.assign(meta, { thumb: pending.thumb, w: pending.w, h: pending.h });
+    batch.set(photoFileDoc(cid, pid), { data: pending.data });
+    fullCache.set(pid, pending.data);
+  } else {
+    meta.url = pending.url;
+  }
+  batch.set(photoDoc(cid, pid), meta);
+  return coverRef({ id: pid, ...meta });
+}
+
+const coverRef = p => ({ photoId: p.id, kind: p.kind, src: p.kind === "link" ? p.url : p.thumb });
+
+async function photoFull(cid, p) {
+  if (p.kind === "link") return p.url;
+  if (fullCache.has(p.id)) return fullCache.get(p.id);
+  const snap = await getDoc(photoFileDoc(cid, p.id));
+  const data = snap.exists() ? snap.data().data : null;
+  if (data) fullCache.set(p.id, data);
+  return data;
+}
+
+// Firestore ne supprime pas les sous-collections avec le document parent
+async function deleteCounterPhotos(cid) {
+  const jobs = [];
+  for (const col of [photosCol(cid), photoFilesCol(cid)]) {
+    const snap = await getDocs(col);
+    for (let i = 0; i < snap.docs.length; i += 400) {
+      const b = writeBatch(db);
+      snap.docs.slice(i, i + 400).forEach(d => b.delete(d.ref));
+      jobs.push(b.commit());
+    }
+  }
+  await Promise.all(jobs);
+}
+
+/* ------------------------------------------------ Affichage */
+
+// Pastille de la carte : la miniature d'illustration, sinon l'icône
+function badgeHtml(c) {
+  const icon = `<i class="fa-solid fa-${esc(c.icon || "hourglass-half")}"></i>`;
+  if (!c.cover?.src) return `<span class="counter-badge">${icon}</span>`;
+  return `
+    <span class="counter-badge counter-thumb" data-thumb>
+      ${icon}
+      <img src="${esc(c.cover.src)}" alt="" loading="lazy" referrerpolicy="no-referrer" draggable="false" data-fallback>
+      <span class="thumb-dot">${icon}</span>
+    </span>`;
+}
+
+function coverHtml(c) {
+  if (!c.cover?.src) return "";
+  const src = fullCache.get(c.cover.photoId) || c.cover.src;
+  return `
+    <button type="button" class="hero-cover" data-thumb data-open-cover aria-label="Voir la photo d’illustration">
+      <img src="${esc(src)}" alt="" referrerpolicy="no-referrer" data-fallback data-cover-img>
+      <span class="pp-broken"><i class="fa-solid fa-image"></i> Image introuvable</span>
+    </button>`;
+}
+
+function photosHtml(c) {
+  const mine = photos.cid === c.id;
+  const list = mine ? sortedPhotos() : [];
+  const loading = mine && !photos.ready;
+  const tiles = list.map(p => {
+    const isCover = c.cover?.photoId === p.id;
+    const date = fmtDate(p.takenAt, { day: "numeric", month: "short", year: "numeric" });
+    return `
+      <li>
+        <button type="button" class="photo-tile" data-photo="${esc(p.id)}" data-thumb aria-label="Photo du ${esc(fmtDate(p.takenAt))}${p.caption ? ` : ${esc(p.caption)}` : ""}">
+          <img src="${esc(p.kind === "link" ? p.url : p.thumb)}" alt="" loading="lazy" referrerpolicy="no-referrer" data-fallback>
+          <span class="pp-broken"><i class="fa-solid fa-image"></i></span>
+          ${isCover ? `<span class="photo-star" title="Photo d’illustration"><i class="fa-solid fa-star"></i></span>` : ""}
+          ${p.kind === "link" ? `<span class="photo-kind" title="Photo en lien"><i class="fa-solid fa-link"></i></span>` : ""}
+          <span class="photo-date">${esc(date)}</span>
+        </button>
+      </li>`;
+  }).join("");
+  return `
+    <section class="block" style="--c:${esc(c.color || COLORS[0])}">
+      <div class="block-head">
+        <h3 class="block-title">Photos${list.length ? ` <span class="cat-count">${list.length}</span>` : ""}</h3>
+        <button type="button" class="btn btn-ghost btn-small" data-add-photo><i class="fa-solid fa-plus"></i> Ajouter une photo</button>
+      </div>
+      ${loading ? `<p class="muted">Chargement des photos…</p>`
+      : list.length ? `<ul class="photo-grid">${tiles}</ul>`
+      : `<div class="card"><p class="muted">Aucune photo pour l’instant. Ajoute une photo d’illustration, ou des photos de suivi datées pour voir l’évolution au fil du temps.</p></div>`}
+    </section>`;
+}
+
+function bindPhotos(view, c) {
+  $("[data-add-photo]", view)?.addEventListener("click", () => openPhotoAdder(c));
+  $$("[data-photo]", view).forEach(btn => btn.addEventListener("click", () => {
+    const p = photoById(btn.dataset.photo);
+    if (p) openPhotoViewer(c, p);
+  }));
+  $("[data-open-cover]", view)?.addEventListener("click", () => {
+    const p = photoById(c.cover?.photoId);
+    if (p) openPhotoViewer(c, p);
+    else if (!photos.ready) toast("Photos en cours de chargement…");
+    else toast("Cette photo ne fait plus partie de la galerie.");
+  });
+  // Image complète de l'illustration, à la place de la miniature
+  const cover = c.cover;
+  if (cover?.kind === "file" && !fullCache.has(cover.photoId)) {
+    photoFull(c.id, { id: cover.photoId, kind: "file" }).then(src => {
+      const img = $("[data-cover-img]", view);
+      if (src && img && img.isConnected && counterById(c.id)?.cover?.photoId === cover.photoId) img.src = src;
+    }).catch(err => console.error(err));
+  }
+}
+
+/* ------------------------------------------------ Ajouter une photo */
+
+function openPhotoAdder(c) {
+  const today = toLocalDay(Date.now());
+  let picker = null;
+  openSheet({
+    title: "Ajouter une photo",
+    body: `
+      <div class="form">
+        <div class="field">
+          <span class="field-label">Photo</span>
+          <div data-picker></div>
+        </div>
+        <label class="field">
+          <span class="field-label">Date</span>
+          <input type="date" name="day" value="${today}" max="${today}">
+          <span class="hint" data-day-hint>Aujourd’hui par défaut. Choisis une date passée pour une photo plus ancienne.</span>
+        </label>
+        <label class="field">
+          <span class="field-label">Légende (facultatif)</span>
+          <input name="caption" maxlength="140" placeholder="Ex. Premier footing" autocomplete="off">
+        </label>
+        <div class="switch-list">
+          ${switchRow("cover", "Photo d’illustration", "En miniature sur la carte et en tête de la page du compteur.", !c.cover)}
+        </div>
+        <p class="field-error hidden" data-error role="alert"></p>
+      </div>`,
+    footer: `<button type="button" class="btn btn-primary btn-block" data-save>Ajouter la photo</button>`,
+    isDirty: () => !!picker?.pending,
+    onMount(el, entry) {
+      const day = $("[name=day]", el);
+      const caption = $("[name=caption]", el);
+      const hint = $("[data-day-hint]", el);
+      const defaultHint = hint.textContent;
+
+      picker = mountPhotoPicker($("[data-picker]", el), {
+        onChange(p) {
+          // Photo de la galerie plus ancienne : on propose sa date
+          const fd = p?.kind === "file" ? p.fileDate : null;
+          if (fd && toLocalDay(fd) !== day.value && fd <= Date.now()) {
+            hint.innerHTML = `${esc(defaultHint)} <button type="button" class="inline-link" data-use-file-date>Utiliser la date du fichier (${esc(fmtDate(fd))})</button>`;
+            $("[data-use-file-date]", hint).addEventListener("click", () => { day.value = toLocalDay(fd); hint.textContent = defaultHint; });
+          } else {
+            hint.textContent = defaultHint;
+          }
+        }
+      });
+
+      $("[data-save]", el).addEventListener("click", () => {
+        const err = $("[data-error]", el);
+        const fail = msg => { err.textContent = msg; err.classList.remove("hidden"); };
+        if (picker.busy) return fail("La photo est en cours de préparation, patiente un instant.");
+        if (!picker.pending) return fail("Prends une photo, choisis-en une ou colle un lien.");
+        if (!day.value) return fail("Indique la date de la photo.");
+        if (day.value > toLocalDay(Date.now())) return fail("La date ne peut pas être dans le futur.");
+
+        const batch = writeBatch(db);
+        const ref = addPhotoToBatch(batch, c.id, picker.pending, { takenAt: dayToTime(day.value), caption: caption.value.trim() });
+        if ($("[name=cover]", el).checked) batch.update(userDoc("counters", c.id), { cover: ref });
+        entry.close(() => persist(batch.commit(), "Photo ajoutée"));
+      });
+    }
+  });
+}
+
+/* ------------------------------------------------ Voir, modifier, supprimer une photo */
+
+function openPhotoViewer(c, p) {
+  const today = toLocalDay(Date.now());
+  const isCover = c.cover?.photoId === p.id;
+  const dayN = !isCd(c) && p.takenAt >= c.startAt ? C.fullDays(c.startAt, p.takenAt) + 1 : null;
+  const initialDay = toLocalDay(p.takenAt);
+  const initialCaption = p.caption || "";
+
+  openSheet({
+    title: capitalize(fmtDate(p.takenAt)),
+    body: `
+      <figure class="photo-full" data-thumb>
+        <img src="${esc(photoSrc(p))}" alt="${esc(p.caption || "")}" referrerpolicy="no-referrer" data-fallback data-full>
+        <span class="pp-broken"><i class="fa-solid fa-image"></i> Image introuvable${p.kind === "link" ? " : le lien ne répond plus" : ""}</span>
+      </figure>
+      <p class="photo-meta">
+        ${esc(capitalize(fmtDay(p.takenAt)))}${dayN ? `, jour ${esc(fmtInt(dayN))} du compteur` : ""}
+        ${p.kind === "link" && safeLink(p.url) ? `<br><a class="inline-link" href="${esc(p.url)}" target="_blank" rel="noopener noreferrer"><i class="fa-solid fa-arrow-up-right-from-square"></i> Ouvrir le lien d’origine</a>` : ""}
+      </p>
+      <div class="form">
+        <label class="field">
+          <span class="field-label">Date</span>
+          <input type="date" name="day" value="${initialDay}" max="${today}">
+        </label>
+        <label class="field">
+          <span class="field-label">Légende</span>
+          <input name="caption" maxlength="140" value="${esc(initialCaption)}" placeholder="Facultatif" autocomplete="off">
+        </label>
+        <div class="switch-list">
+          ${switchRow("cover", "Photo d’illustration", "En miniature sur la carte et en tête de la page du compteur.", isCover)}
+        </div>
+        <p class="field-error hidden" data-error role="alert"></p>
+      </div>`,
+    footer: `
+      <div class="foot-actions">
+        <button type="button" class="btn btn-danger-ghost" data-del><i class="fa-solid fa-trash-can"></i> Supprimer</button>
+        <button type="button" class="btn btn-primary" data-save>Enregistrer</button>
+      </div>`,
+    isDirty: () => {
+      const el = sheetStack[sheetStack.length - 1]?.el;
+      if (!el) return false;
+      return $("[name=day]", el).value !== initialDay
+        || $("[name=caption]", el).value !== initialCaption
+        || $("[name=cover]", el).checked !== isCover;
+    },
+    onMount(el, entry) {
+      if (p.kind === "file" && !fullCache.has(p.id)) {
+        photoFull(c.id, p).then(src => {
+          const img = $("[data-full]", el);
+          if (src && img?.isConnected) img.src = src;
+        }).catch(err => console.error(err));
+      }
+
+      $("[data-save]", el).addEventListener("click", () => {
+        const day = $("[name=day]", el).value;
+        const caption = $("[name=caption]", el).value.trim();
+        const cover = $("[name=cover]", el).checked;
+        const err = $("[data-error]", el);
+        if (!day) { err.textContent = "Indique la date de la photo."; err.classList.remove("hidden"); return; }
+        if (day > toLocalDay(Date.now())) { err.textContent = "La date ne peut pas être dans le futur."; err.classList.remove("hidden"); return; }
+
+        const batch = writeBatch(db);
+        const upd = {};
+        if (day !== initialDay) upd.takenAt = dayToTime(day);
+        if (caption !== initialCaption) upd.caption = caption;
+        if (Object.keys(upd).length) batch.update(photoDoc(c.id, p.id), upd);
+        if (cover && !isCover) batch.update(userDoc("counters", c.id), { cover: coverRef(p) });
+        if (!cover && isCover) batch.update(userDoc("counters", c.id), { cover: null });
+        const changed = Object.keys(upd).length || cover !== isCover;
+        entry.close(() => { if (changed) persist(batch.commit(), "Photo enregistrée"); });
+      });
+
+      $("[data-del]", el).addEventListener("click", async () => {
+        const ok = await confirmDialog("Supprimer cette photo ?", {
+          detail: `Photo du ${fmtDate(p.takenAt)}.${isCover ? " C’est la photo d’illustration : la carte retrouvera son icône." : ""}`,
+          confirmLabel: "Supprimer", danger: true
+        });
+        if (!ok) return;
+        const batch = writeBatch(db);
+        batch.delete(photoDoc(c.id, p.id));
+        if (p.kind === "file") batch.delete(photoFileDoc(c.id, p.id));
+        if (counterById(c.id)?.cover?.photoId === p.id) batch.update(userDoc("counters", c.id), { cover: null });
+        fullCache.delete(p.id);
+        entry.close(() => persist(batch.commit(), "Photo supprimée"));
+      });
+    }
+  });
+}
+
+/* =========================================================
    Actions sur un compteur
    ========================================================= */
 
@@ -956,13 +1458,13 @@ async function deletePeriod(c, index) {
 
 async function deleteCounter(c, entry) {
   const ok = await confirmDialog(`Supprimer « ${c.name} » ?`, {
-    detail: "Le compteur et son historique disparaissent définitivement.",
+    detail: "Le compteur, son historique et ses photos disparaissent définitivement.",
     confirmLabel: "Supprimer", danger: true
   });
   if (!ok) return;
   entry.close(() => {
     if (parseRoute().id === c.id) location.replace("#/");
-    persist(deleteDoc(userDoc("counters", c.id)), "Compteur supprimé");
+    persist(Promise.all([deleteDoc(userDoc("counters", c.id)), deleteCounterPhotos(c.id)]), "Compteur supprimé");
   });
 }
 
@@ -1070,6 +1572,12 @@ function openCounterEditor(counter = null, preset = {}) {
         </div>
       </fieldset>
 
+      <div class="field">
+        <span class="field-label">Photo d’illustration</span>
+        <div data-cover-picker></div>
+        <span class="hint">Affichée en miniature sur la carte. Elle rejoint aussi les photos du compteur, à la date du jour.</span>
+      </div>
+
       <div class="switch-list">
         <div data-only-since class="${cdBase ? "hidden" : ""}">
           ${switchRow("resettable", "Remise à zéro", "Un bouton pour repartir de zéro, avec confirmation.", base.resettable !== false)}
@@ -1084,16 +1592,18 @@ function openCounterEditor(counter = null, preset = {}) {
 
   const footer = `<button type="button" class="btn btn-primary btn-block" data-save>${counter ? "Enregistrer" : "Créer"}</button>`;
   let initial = "";
+  let picker = null;
   const serialize = form => JSON.stringify([...new FormData(form).entries()]);
 
   openSheet({
     title: counter ? (cdBase ? "Modifier le décompte" : "Modifier le compteur") : "Nouveau compteur",
     body, footer,
-    isDirty: () => serialize($("form", sheetStack[sheetStack.length - 1].el)) !== initial,
+    isDirty: () => serialize($("form", sheetStack[sheetStack.length - 1].el)) !== initial || !!picker?.dirty,
     onMount(el, entry) {
       const form = $("form", el);
       const f = form.elements;
       initial = serialize(form);
+      picker = mountPhotoPicker($("[data-cover-picker]", form), { current: counter?.cover || null, allowRemove: true });
 
       const readUnits = () => $$("input[name=units]:checked", form).map(i => i.value);
       const mode = () => f.mode.value === "countdown" ? "countdown" : "since";
@@ -1200,7 +1710,10 @@ function openCounterEditor(counter = null, preset = {}) {
         if (Number.isNaN(t)) return fail("Indique une date valide.", timed ? f.datetime : f.day);
         if (!us.length) return fail("Choisis au moins une unité d’affichage.");
 
+        if (picker.busy) return fail("La photo est en cours de préparation, patiente un instant.");
+
         const batch = writeBatch(db);
+        const counterId = counter ? counter.id : newId();
         let categoryId = f.category.value || null;
         if (categoryId === "__new") {
           const catName = f.newCategory.value.trim();
@@ -1236,11 +1749,14 @@ function openCounterEditor(counter = null, preset = {}) {
           data.startAt = t;
         }
 
+        if (picker.pending) data.cover = addPhotoToBatch(batch, counterId, picker.pending, { takenAt: Date.now() });
+        else if (picker.removed) data.cover = null;
+
         if (counter) {
           if ((categoryById(counter.categoryId)?.id || null) !== categoryId) data.order = nextOrder(categoryId);
           batch.update(userDoc("counters", counter.id), data);
         } else {
-          batch.set(userDoc("counters", newId()), {
+          batch.set(userDoc("counters", counterId), {
             ...data,
             order: nextOrder(categoryId),
             periods: [],
@@ -1457,7 +1973,7 @@ function openAccount() {
       <div class="account">
         ${u.photoURL ? `<img class="account-avatar" src="${esc(u.photoURL)}" alt="" referrerpolicy="no-referrer">` : `<span class="account-avatar account-avatar--empty"><i class="fa-solid fa-user"></i></span>`}
         <p class="account-name">${esc(u.displayName || "Connecté avec Google")}</p>
-        <p class="muted">Tes compteurs sont liés à ton compte et visibles par toi seul.</p>
+        <p class="muted">Tes compteurs et leurs photos sont liés à ton compte et visibles par toi seul.</p>
       </div>
       ${notifBlockHtml()}`,
     footer: `<button type="button" class="btn btn-ghost btn-block" data-logout><i class="fa-solid fa-right-from-bracket"></i> Se déconnecter</button>`,
@@ -1594,6 +2110,8 @@ onAuthStateChanged(auth, user => {
     startListeners();
   } else {
     stopListeners();
+    watchPhotos(null);
+    fullCache.clear();
     state.categories = [];
     state.counters = [];
     showScreen("login");

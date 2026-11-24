@@ -47,6 +47,18 @@ Le temps qui passe, objectif par objectif : jours sans alcool, semaines depuis u
 - Une série peut être supprimée de l’historique.
 - Désactiver l’historique masque les séries sans les effacer.
 
+## Photos
+
+- Chaque compteur (ou décompte) peut avoir des **photos**, de trois façons : **Prendre une photo** (appareil photo du téléphone), **Galerie** / **Choisir une image**, ou **Lien** vers une image en ligne (`https://…/photo.jpg`).
+- **Photo d’illustration** : affichée en **miniature sur la carte** (l’icône passe en pastille dans le coin) et en grand en tête de la page du compteur. Elle se choisit dans les réglages du compteur, à l’ajout d’une photo, ou depuis n’importe quelle photo de la galerie.
+- **Photos de suivi** : section **Photos** sur la page du compteur, bouton **Ajouter une photo**. Chaque photo est **datée** : la date du jour par défaut, ou une date passée pour une photo plus ancienne (antidatée). Si l’image choisie dans la galerie est plus ancienne, l’appli propose d’utiliser la date du fichier.
+- Galerie triée de la plus récente à la plus ancienne, date sur chaque vignette, étoile sur la photo d’illustration.
+- Un appui sur une photo l’ouvre en grand, avec sa date (et « jour N du compteur »), et permet de changer la date, la légende, d’en faire l’illustration ou de la supprimer.
+- Les photos prises ou choisies sont réduites dans le navigateur (1 600 px de grand côté, JPEG) et enregistrées dans Firestore, sans Firebase Storage : aucune offre payante n’est nécessaire. Une miniature carrée sert à la galerie et à la carte ; l’image complète n’est chargée qu’à l’affichage.
+- Les photos en lien restent hébergées là où elles sont : si le lien disparaît, la vignette affiche « Image introuvable » et la carte retrouve son icône.
+- Supprimer un compteur supprime aussi ses photos.
+- Les photos sont, comme les compteurs, protégées par les règles Firestore : seul le compte propriétaire peut les lire.
+
 ## Grands caps et notifications
 
 Caps suivis : 7, 50, 100, 200, 300, 500, 1 000 et 1 500 jours, puis tous les 1 000 jours ; 1, 3 et 6 mois ; chaque anniversaire en années.
@@ -118,7 +130,11 @@ users/{uid}/counters/{id}    nom, icône, couleur, catégorie, ordre, départ (s
                              type (mode : "since" | "countdown"), à la journée (allDay),
                              date visée (targetAt, ms) et chaque année (repeat) pour un décompte,
                              unités, présentation, remise à zéro, historique, notifications,
-                             séries passées (periods : [{ start, end }])
+                             séries passées (periods : [{ start, end }]),
+                             photo d'illustration (cover : { photoId, kind, src })
+users/{uid}/counters/{id}/photos/{pid}      type (kind : "file" | "link"), date (takenAt, ms),
+                                            légende, miniature (thumb, data URL) ou lien (url)
+users/{uid}/counters/{id}/photoFiles/{pid}  image complète (data, data URL JPEG, < 900 Ko)
 
 Pour un décompte, startAt est la date de création (repère du chemin parcouru et
 des notifications). Les compteurs existants sans mode ni allDay restent des
