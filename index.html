@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#EEF1EF" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0D1512" media="(prefers-color-scheme: dark)">
+  <meta name="description" content="Mes compteurs : le temps qui passe, objectif par objectif, en jours, semaines ou années.">
+  <title>Mes compteurs</title>
+
+  <link rel="icon" type="image/svg+xml" href="./favicon.svg">
+  <link rel="icon" type="image/png" href="./icons/icon-192.png">
+  <link rel="apple-touch-icon" href="./icons/icon-192.png">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Compteurs">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+  <!-- Chargement -->
+  <div id="splash" class="splash" aria-hidden="true">
+    <div class="brand-mark brand-mark--lg"><span></span><span></span><span></span><span></span></div>
+  </div>
+
+  <!-- Écran de connexion -->
+  <section id="login-screen" class="login hidden" aria-labelledby="login-title">
+    <div class="login-inner">
+      <div class="brand-mark brand-mark--lg"><span></span><span></span><span></span><span></span></div>
+      <h1 id="login-title" class="login-title">Mes compteurs</h1>
+      <p class="login-text">Les jours sans craquer, les semaines depuis une naissance, les années depuis un grand départ. Chaque compteur avance tout seul.</p>
+      <button id="btn-login" class="btn btn-google" type="button">
+        <i class="fa-brands fa-google"></i>
+        <span>Continuer avec Google</span>
+      </button>
+      <p id="login-error" class="login-error hidden" role="alert"></p>
+    </div>
+  </section>
+
+  <!-- Application -->
+  <div id="app" class="hidden">
+    <header class="topbar">
+      <button id="btn-back" class="icon-btn hidden" type="button" aria-label="Retour">
+        <i class="fa-solid fa-arrow-left"></i>
+      </button>
+      <a id="btn-home" class="topbar-brand" href="#/" aria-label="Accueil">
+        <div class="brand-mark"><span></span><span></span><span></span><span></span></div>
+      </a>
+      <div class="topbar-title">
+        <span id="topbar-kicker" class="topbar-kicker"></span>
+        <h1 id="topbar-title">Mes compteurs</h1>
+      </div>
+      <div id="topbar-actions" class="topbar-actions"></div>
+      <button id="btn-account" class="avatar-btn" type="button" aria-label="Mon compte">
+        <img id="user-avatar" alt="" referrerpolicy="no-referrer">
+        <i class="fa-solid fa-user"></i>
+      </button>
+    </header>
+
+    <main id="view" class="view" tabindex="-1"></main>
+
+    <button id="fab" class="add-btn hidden" type="button"></button>
+
+    <nav class="tabbar" aria-label="Navigation principale">
+      <a href="#/" data-tab="home"><i class="fa-solid fa-hourglass-half" aria-hidden="true"></i><span>Compteurs</span></a>
+      <a href="#/caps" data-tab="caps"><i class="fa-solid fa-flag-checkered" aria-hidden="true"></i><span>Prochains caps</span></a>
+    </nav>
+  </div>
+
+  <div id="sheet-root"></div>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
